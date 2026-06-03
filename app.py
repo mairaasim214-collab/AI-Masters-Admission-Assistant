@@ -1,6 +1,9 @@
 import streamlit as st
 from pypdf import PdfReader
 from dotenv import load_dotenv
+import requests
+from bs4 import BeautifulSoup
+import uuid
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -9,11 +12,83 @@ from langchain_community.vectorstores import Chroma
 
 load_dotenv()
 
+
+# ---------- Helper Function: Clear Previous Source ----------
+def clear_previous_source():
+    keys_to_clear = [
+        "full_text",
+        "chunks",
+        "vectorstore",
+        "source_type",
+        "source_name",
+        "last_answer",
+        "last_sources"
+    ]
+
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
+
+# ---------- Helper Function: Website Text Extraction ----------
+def extract_text_from_website(url):
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0 Safari/537.36"
+        )
+    }
+
+    response = requests.get(url, headers=headers, timeout=15)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Remove noisy website elements
+    for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        element.decompose()
+
+    text = soup.get_text(separator="\n")
+
+    # Clean empty lines and extra spaces
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    clean_text = "\n".join(lines)
+
+    return clean_text
+
+
+# ---------- Helper Function: Create Vector Database ----------
+def create_vectorstore_from_text(text):
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+
+    chunks = text_splitter.split_text(text)
+
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model="models/gemini-embedding-001"
+    )
+
+    collection_name = f"admission_source_{uuid.uuid4().hex}"
+
+    vectorstore = Chroma.from_texts(
+        texts=chunks,
+        embedding=embeddings,
+        collection_name=collection_name
+    )
+
+    return chunks, vectorstore
+
+
+# ---------- Page Configuration ----------
 st.set_page_config(
     page_title="AI Master's Admission Assistant",
     page_icon="🎓",
     layout="wide"
 )
+
 
 # ---------- Custom CSS ----------
 st.markdown(
@@ -57,6 +132,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
 # ---------- Sidebar ----------
 with st.sidebar:
     st.title("🎓 Admission AI")
@@ -65,19 +141,23 @@ with st.sidebar:
     st.markdown("---")
 
     st.subheader("Current Version")
-    st.write("Version 3: PDF RAG answer generation")
+    st.write("Version 4: PDF + Website RAG Answer Generation")
 
-    st.subheader("Features Planned")
+    st.subheader("Features Completed")
     st.write("✅ PDF upload")
     st.write("✅ PDF text extraction")
+    st.write("✅ Website link input")
+    st.write("✅ Website text extraction")
     st.write("✅ Text chunking")
     st.write("✅ Embeddings")
     st.write("✅ Vector search")
     st.write("✅ AI answer generation")
-    st.write("✅ Website link input")
-    st.write("🔜 Website text extraction")
+
+    st.subheader("Features Planned")
     st.write("🔜 Eligibility checker")
+    st.write("🔜 Student profile form")
     st.write("🔜 University comparison")
+
 
 # ---------- Main Header ----------
 st.markdown(
@@ -89,6 +169,7 @@ st.markdown(
     '<div class="subtitle">Ask admission and eligibility questions from official university PDFs or program webpages.</div>',
     unsafe_allow_html=True
 )
+
 
 # ---------- Intro Cards ----------
 col1, col2, col3 = st.columns(3)
@@ -126,6 +207,7 @@ with col3:
         unsafe_allow_html=True
     )
 
+
 # ---------- Input Section ----------
 st.markdown(
     '<div class="section-title">Choose Your Requirement Source</div>',
@@ -133,6 +215,7 @@ st.markdown(
 )
 
 tab1, tab2 = st.tabs(["📄 Upload PDF", "🔗 Paste Website Link"])
+
 
 # ---------- PDF Upload Tab ----------
 with tab1:
@@ -151,7 +234,9 @@ with tab1:
         st.write(f"**File type:** {uploaded_file.type}")
         st.write(f"**File size:** {round(uploaded_file.size / 1024, 2)} KB")
 
-        if st.button("Process PDF"):
+        if st.button("Process PDF", key="process_pdf_button"):
+            clear_previous_source()
+
             with st.spinner("Extracting text from PDF..."):
                 reader = PdfReader(uploaded_file)
 
@@ -167,33 +252,16 @@ with tab1:
             if full_text.strip():
                 st.success("Text extracted successfully.")
 
-                with st.spinner("Splitting text into chunks..."):
-                    text_splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=1000,
-                        chunk_overlap=200
-                    )
-
-                    chunks = text_splitter.split_text(full_text)
+                with st.spinner("Splitting text, creating embeddings, and building vector database..."):
+                    chunks, vectorstore = create_vectorstore_from_text(full_text)
 
                 st.session_state.full_text = full_text
                 st.session_state.chunks = chunks
+                st.session_state.vectorstore = vectorstore
                 st.session_state.source_type = "PDF"
                 st.session_state.source_name = uploaded_file.name
 
                 st.success(f"Text split successfully into {len(chunks)} chunks.")
-
-                with st.spinner("Creating embeddings and vector database..."):
-                    embeddings = GoogleGenerativeAIEmbeddings(
-                        model="models/gemini-embedding-001"
-                    )
-
-                    vectorstore = Chroma.from_texts(
-                        texts=chunks,
-                        embedding=embeddings
-                    )
-
-                    st.session_state.vectorstore = vectorstore
-
                 st.success("Embeddings created and vector database is ready.")
 
                 st.subheader("Extracted Text Preview")
@@ -212,6 +280,7 @@ with tab1:
             else:
                 st.error("No text could be extracted from this PDF.")
 
+
 # ---------- Website Link Tab ----------
 with tab2:
     st.subheader("Paste University Program Website Link")
@@ -225,8 +294,51 @@ with tab2:
         st.success("Website link received.")
         st.write(f"**URL:** {website_url}")
 
-        if st.button("Process Website Link"):
-            st.info("Website text extraction will be added in the next step.")
+        if st.button("Process Website Link", key="process_website_button"):
+            clear_previous_source()
+
+            try:
+                with st.spinner("Extracting text from website..."):
+                    website_text = extract_text_from_website(website_url)
+
+                if website_text.strip():
+                    st.success("Website text extracted successfully.")
+
+                    with st.spinner("Splitting website text, creating embeddings, and building vector database..."):
+                        chunks, vectorstore = create_vectorstore_from_text(website_text)
+
+                    st.session_state.full_text = website_text
+                    st.session_state.chunks = chunks
+                    st.session_state.vectorstore = vectorstore
+                    st.session_state.source_type = "Website"
+                    st.session_state.source_name = website_url
+
+                    st.success(f"Website text split successfully into {len(chunks)} chunks.")
+                    st.success("Embeddings created and vector database is ready.")
+
+                    st.subheader("Website Text Preview")
+                    st.text_area(
+                        "Preview of extracted website text",
+                        website_text[:3000],
+                        height=250
+                    )
+
+                    st.subheader("Chunk Preview")
+
+                    for i, chunk in enumerate(chunks[:3], start=1):
+                        with st.expander(f"Website Chunk {i}"):
+                            st.write(chunk)
+
+                else:
+                    st.error("No useful text could be extracted from this website.")
+
+            except Exception as e:
+                st.error("Website text extraction failed.")
+                st.write("Some websites block scraping or load content using JavaScript.")
+                st.write("Try another official university page first.")
+                st.write("Error details:")
+                st.code(str(e))
+
 
 # ---------- Question Section ----------
 st.markdown("---")
@@ -242,7 +354,7 @@ if "vectorstore" in st.session_state:
     )
     st.write(f"Total chunks available: {len(st.session_state.chunks)}")
 else:
-    st.warning("Please upload and process a PDF first.")
+    st.warning("Please upload a PDF or process a website link first.")
 
 question = st.text_input(
     "Ask a question",
@@ -251,7 +363,7 @@ question = st.text_input(
 
 if question:
     if "vectorstore" in st.session_state:
-        with st.spinner("Searching the document and generating answer..."):
+        with st.spinner("Searching the source and generating answer..."):
             retriever = st.session_state.vectorstore.as_retriever(
                 search_kwargs={"k": 4}
             )
@@ -289,6 +401,9 @@ Answer:
 
             response = llm.invoke(prompt)
 
+        st.session_state.last_answer = response.content
+        st.session_state.last_sources = relevant_docs
+
         st.subheader("AI Answer")
         st.write(response.content)
 
@@ -299,4 +414,4 @@ Answer:
                 st.write(doc.page_content)
 
     else:
-        st.error("Please process a PDF before asking questions.")
+        st.error("Please upload a PDF or process a website link before asking questions.")
