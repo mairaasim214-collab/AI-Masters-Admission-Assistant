@@ -81,6 +81,26 @@ def create_vectorstore_from_text(text):
 
     return chunks, vectorstore
 
+# ---------- Helper Function: Format Student Profile ----------
+def format_student_profile():
+    if "student_profile" not in st.session_state:
+        return "No student profile provided."
+
+    profile = st.session_state.student_profile
+
+    formatted_profile = f"""
+Student Profile:
+- Degree: {profile.get("degree", "Not provided")}
+- GPA: {profile.get("gpa", "Not provided")}
+- IELTS Score: {profile.get("ielts", "Not provided")}
+- German Level: {profile.get("german_level", "Not provided")}
+- ECTS / Credit Hours: {profile.get("ects_credits", "Not provided")}
+- Target Field: {profile.get("target_field", "Not provided")}
+- Notes: {profile.get("notes", "Not provided")}
+"""
+
+    return formatted_profile
+
 
 # ---------- Page Configuration ----------
 st.set_page_config(
@@ -138,26 +158,6 @@ with st.sidebar:
     st.title("🎓 Admission AI")
     st.write("A RAG-based assistant for Master's admission requirements.")
 
-    st.markdown("---")
-
-    st.subheader("Current Version")
-    st.write("Version 4: PDF + Website RAG Answer Generation")
-
-    st.subheader("Features Completed")
-    st.write("✅ PDF upload")
-    st.write("✅ PDF text extraction")
-    st.write("✅ Website link input")
-    st.write("✅ Website text extraction")
-    st.write("✅ Text chunking")
-    st.write("✅ Embeddings")
-    st.write("✅ Vector search")
-    st.write("✅ AI answer generation")
-
-    st.subheader("Features Planned")
-    st.write("🔜 Eligibility checker")
-    st.write("🔜 Student profile form")
-    st.write("🔜 University comparison")
-
 
 # ---------- Main Header ----------
 st.markdown(
@@ -207,6 +207,77 @@ with col3:
         unsafe_allow_html=True
     )
 
+# ---------- Student Profile Section ----------
+st.markdown(
+    '<div class="section-title">👤 Student Profile</div>',
+    unsafe_allow_html=True
+)
+
+st.write(
+    "Add your academic profile so the assistant can give eligibility-focused answers."
+)
+
+profile_col1, profile_col2 = st.columns(2)
+
+with profile_col1:
+    degree = st.text_input(
+        "Degree / Background",
+        placeholder="Example: Computer Engineering"
+    )
+
+    gpa = st.text_input(
+        "GPA / Grade",
+        placeholder="Example: 2.8 German grade or 3.1/4.0"
+    )
+
+    ielts = st.text_input(
+        "IELTS / English Score",
+        placeholder="Example: IELTS 7"
+    )
+
+with profile_col2:
+    german_level = st.text_input(
+        "German Level",
+        placeholder="Example: A1 planned / A2 completed / Not required"
+    )
+
+    ects_credits = st.text_input(
+        "ECTS / Credit Hours",
+        placeholder="Example: 136 credit hours or 240 ECTS"
+    )
+
+    target_field = st.text_input(
+        "Target Field",
+        placeholder="Example: AI, Data Science, Computer Science"
+    )
+
+notes = st.text_area(
+    "Additional Notes",
+    placeholder="Example: AI/ML internship, software engineering experience, ML projects."
+)
+
+if st.button("Save Student Profile", key="save_student_profile_button"):
+    st.session_state.student_profile = {
+        "degree": degree,
+        "gpa": gpa,
+        "ielts": ielts,
+        "german_level": german_level,
+        "ects_credits": ects_credits,
+        "target_field": target_field,
+        "notes": notes
+    }
+
+    st.success("Student profile saved successfully.")
+
+if "student_profile" in st.session_state:
+    profile = st.session_state.student_profile
+
+    st.info(
+        f"Saved profile: {profile.get('degree', 'Not provided')} | "
+        f"GPA: {profile.get('gpa', 'Not provided')} | "
+        f"IELTS: {profile.get('ielts', 'Not provided')} | "
+        f"Target: {profile.get('target_field', 'Not provided')}"
+    )
 
 # ---------- Input Section ----------
 st.markdown(
@@ -374,25 +445,53 @@ if question:
                 [doc.page_content for doc in relevant_docs]
             )
 
+            student_profile_text = format_student_profile()
+
             prompt = f"""
-You are an AI admission assistant.
+            You are an AI admission assistant for Master's applicants.
 
-Your task is to answer questions using ONLY the provided university requirement text.
-Do not use outside knowledge.
+            Your task is to answer questions using ONLY:
+            1. The provided university requirement text
+            2. The provided student profile
 
-If the answer is not clearly available in the provided text, say:
-"I could not find this information clearly in the provided document."
+            Do not use outside knowledge.
 
-Write your answer in a clear, structured, student-friendly way.
+            If the answer is not clearly available in the university requirement text, say:
+            "I could not find this information clearly in the provided university requirement source."
 
-Question:
-{question}
+            When the question asks about eligibility, give a structured assessment using this format:
 
-University requirement text:
-{context}
+            Eligibility Assessment:
+            - Overall status: Likely eligible / Possibly eligible / Risky / Not enough information
+            - Degree/background match:
+            - GPA/grade requirement:
+            - English language requirement:
+            - German language requirement:
+            - ECTS/credit requirement:
+            - Missing or unclear requirements:
+            - Final recommendation:
 
-Answer:
-"""
+            Use these rules for the overall status:
+            - Use "Likely eligible" only if the university requirement text clearly confirms that the student's degree/background, GPA/grade, English requirement, German requirement if any, and ECTS/credit requirement are all satisfied.
+            - Use "Possibly eligible" if the student's profile seems related or promising, but one or more key requirements are missing, unclear, or not explicitly stated in the provided text.
+            - Use "Risky" if the provided text shows a requirement that the student may not meet.
+            - Use "Not enough information" if the provided text does not contain enough admission criteria to assess eligibility.
+
+        Do not mark the student as "Likely eligible" when GPA, ECTS/credits, or language requirements are missing or unclear.
+
+            Be careful. Do not guarantee admission. Explain that final eligibility depends on the university's official evaluation.
+
+            Student profile:
+            {student_profile_text}
+
+            Question:
+            {question}
+
+            University requirement text:
+            {context}
+
+            Answer:
+            """
 
             llm = ChatGoogleGenerativeAI(
                 model="gemini-2.5-flash",
